@@ -13,6 +13,7 @@ import math
 import time
 from lxml import etree
 from random import shuffle
+import pandas as pd
 
 #!!!If running TF v > 2.0 uncomment those lines (also remove the tensorflow import on line 5):!!!
 #import tensorflow.compat.v1 as tf
@@ -105,7 +106,7 @@ if a.testMode == "auto":
         a.testMode = "image";
 
 Examples = collections.namedtuple("Examples", "iterator, paths, inputs, targets, count, steps_per_epoch")
-Model = collections.namedtuple("Model", "outputs, gen_loss_L1, gen_grads_and_vars, train, rerendered, gen_loss_L1_exact")
+Model = collections.namedtuple("Model", "outputs, gen_loss_L1, gen_grads_and_vars, train, rerendered, gen_loss_L1_exact, encoder_outputs")
 
 if a.depthFactor == 0:
     a.depthFactor = a.nbTargets
@@ -516,6 +517,7 @@ def create_generator(generator_inputs, generator_outputs_channels):
         (a.ngf * 2 * a.depthFactor, 0.0),   # decoder_3: [batch, 32, 32, ngf * 4 * 2] => [batch, 64, 64, ngf * 2 * 2]
         (a.ngf * a.depthFactor, 0.0),       # decoder_2: [batch, 64, 64, ngf * 2 * 2] => [batch, 128, 128, ngf * 2]
     ]
+    # TODO: Capture data here. 
 
     num_encoder_layers = len(layers)
     for decoder_layer, (out_channels, dropout) in enumerate(layer_specs):
@@ -552,7 +554,7 @@ def create_generator(generator_inputs, generator_outputs_channels):
         output = tf.tanh(output)
         layers.append(output)
 
-    return layers[-1]
+    return layers[-1], layers[num_encoder_layers-1]
     
 def tf_generateDiffuseRendering(batchSize, targets, outputs):    
     currentViewPos = tf_generate_normalized_random_direction(batchSize)
@@ -627,7 +629,7 @@ def create_model(inputs, targets, reuse_bool = False):
 
     with tf.variable_scope("generator", reuse=reuse_bool) as scope:
         out_channels = 9
-        outputs = create_generator(inputs, out_channels) 
+        outputs, encoder_outputs = create_generator(inputs, out_channels) 
         
     partialOutputedNormals = outputs[:,:,:,0:2]
     outputedDiffuse = outputs[:,:,:,2:5]
@@ -722,6 +724,7 @@ def create_model(inputs, targets, reuse_bool = False):
         gen_loss_L1=ema.average(gen_loss_L1),
         gen_grads_and_vars=gen_grads_and_vars,
         outputs=outputs,
+        encoder_outputs=encoder_outputs,
         train=tf.group(update_losses, incr_global_step, gen_train),
         rerendered = [rerenderedTargets,rerenderedOutputs]
     )
@@ -730,6 +733,22 @@ def save_loss_value(values):
     averaged = np.mean(values)
     with open(os.path.join(a.output_dir, "losses.txt"), "a") as f:
             f.write(str(averaged) + "\n")
+
+def save_encoded_features(features, output_dir = a.output_dir):
+    feature_dir = os.path.join(output_dir, "features")
+    if not os.path.exists(feature_dir):
+        os.makedirs(feature_dir)
+    
+    file = os.path.join(feature_dir, "features.csv")
+    extracted_features = np.array(features)
+    extracted_features = np.squeeze(extracted_features).reshape(1,-1)
+    if not os.path.exists(file):
+        df = pd.DataFrame(extracted_features)
+        df.to_csv(file)
+    else:
+        prev = pd.read_csv(file).to_numpy()
+        new = np.concatenate([prev[:,1:], extracted_features], axis=0)
+        pd.DataFrame(new).to_csv(file)
                     
 def save_images(fetches, output_dir = a.output_dir, step=None):
     image_dir = os.path.join(output_dir, "images")
@@ -892,6 +911,7 @@ def main():
     inputs = deprocess(examples.inputs)
     targets = deprocess(tmpTargets)
     outputs = deprocess(model.outputs)
+    encoder_out = model.encoder_outputs
     
             
     if a.mode == "train":
@@ -922,6 +942,7 @@ def main():
         targets_reshaped = reshape_tensor_display(targets, a.nbTargets, logAlbedo = a.logOutputAlbedos)
         outputs_reshaped = reshape_tensor_display(outputs, a.nbTargets, logAlbedo = a.logOutputAlbedos)
         inputs_reshaped = reshape_tensor_display(inputs, 1, logAlbedo = False)
+        encoder_reshaped = encoder_out
 
         if a.mode == "train":
             inputs_reshaped_test = reshape_tensor_display(inputsTests, 1, logAlbedo = False)
@@ -942,12 +963,15 @@ def main():
         converted_outputs = convert(outputs_reshaped)
         if a.mode == "train":
             converted_outputs_test = convert(outputs_test_reshaped)
+    with tf.name_scope("convert_encoder"):
+        converted_encoder = encoder_reshaped
     with tf.name_scope("encode_images"):
         display_fetches = {
             "paths": examples.paths,
             "inputs": tf.map_fn(tf.image.encode_png, converted_inputs, dtype=tf.string, name="input_pngs"),
             "targets": tf.map_fn(tf.image.encode_png, converted_targets, dtype=tf.string, name="target_pngs"),
             "outputs": tf.map_fn(tf.image.encode_png, converted_outputs, dtype=tf.string, name="output_pngs"),
+            "encoder": tf.map_fn(tf.identity, converted_encoder, dtype=tf.float32, name="encoder_pngs"),
         }
         if a.mode == "train":
             display_fetches_test = {
@@ -980,17 +1004,17 @@ def main():
         max_steps = 2**32
         
         sess.run(examples.iterator.initializer)
-        print("BBBBBBBBbb")
+        print("Running session")
 
         if a.mode == "test" or a.mode == "eval":
-            print("AAAAAAAAAAAAAAA")
+            print("Starting evaluation")
 
             if a.checkpoint is None:
                 print("checkpoint is required for testing")
                 return
             # testing
             # at most, process the test data once
-            print("CCCCCCCCCCCCCCCCc")
+            print("Checkpoint loaded")
 
             max_steps = min(examples.steps_per_epoch, max_steps)
             print(max_steps)
@@ -1001,6 +1025,7 @@ def main():
                     results = sess.run(display_fetches)
                     #save_tensor_images(results["rerenders"], "rerenderings/", suffix = step)
                     #L1Values.append(results["gen_loss_L1_exact"])
+                    save_encoded_features(results['encoder'])
                     filesets = save_images(results)
                     for i, f in enumerate(filesets):
                         print("evaluated image", f["name"])
