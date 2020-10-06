@@ -9,7 +9,11 @@ a = parser.parse_args()
 
 def main():
     if not os.path.exists(a.output_dir):
-        os.mkdir(a.output_dir)
+        pwd = ""
+        for path_segment in os.path.split(a.output_dir):
+            pwd = os.path.join(pwd, path_segment)
+            if not os.path.exists(pwd):
+                os.mkdir(pwd)
 
     cnt = 1
     for f in os.listdir(a.input_dir):
