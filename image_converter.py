@@ -24,14 +24,14 @@ def main():
             f_path = os.path.join(pwd, f)
             if os.path.isdir(f_path):
                 queue.append(f_path)
-            elif os.path.isfile(f_path) and not f.endswith(".jpg"):
+            elif os.path.isfile(f_path):
                 img = Image.open(f_path)
                 img = img.convert('RGB')
                 w, h = img.size
-                if not (h ==256 and w ==256):
+                if not (h == 256 and w == 256):
                     ratio =  256 / min(h,w)
-                    img = img.resize((round(w*ratio)+1, round(h*ratio)+1))
-                    img = img.crop((0,0,256,256))
+                    img = img.resize((round(w*ratio)+11, round(h*ratio)+11))
+                    img = img.crop((5,5,261,261))
                 img.save(os.path.join(a.output_dir, f"{cnt}.jpg"), quality=100)
                 cnt += 1
 
