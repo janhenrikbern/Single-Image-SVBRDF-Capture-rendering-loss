@@ -236,9 +236,14 @@ def readInputImage(inputPath):
 def readInputFolder(input_dir, shuffleList):
     if input_dir is None or not os.path.exists(input_dir):
         raise Exception("input_dir does not exist")
-        
+
     pathList = glob.glob(os.path.join(input_dir, "*." + a.imageFormat))
     pathList = sorted(pathList);
+
+    for path in os.listdir(input_dir):
+        path = os.path.join(input_dir, path)
+        if os.path.isdir(path):
+               pathList.extend(readInputFolder(path, False))
     
     if shuffleList:
         shuffle(pathList)
